@@ -11,6 +11,11 @@ export const videoService = {
     return res.data;
   },
 
+  async getById(id) {
+    const res = await api.get(`/videos/${id}`);
+    return res.data;
+  },
+
   async upload(formData, onProgress) {
     const res = await api.post('/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
