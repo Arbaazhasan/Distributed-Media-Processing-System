@@ -17,6 +17,14 @@ const VideoSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  cloudinaryUrl: {
+    type: String,
+    default: null,
+  },
+  cloudinaryPublicId: {
+    type: String,
+    default: null,
+  },
   fileSize: {
     type: Number,
     required: true,
@@ -37,6 +45,8 @@ const VideoSchema = new mongoose.Schema({
   outputResolutions: [{
     resolution: String,
     filepath: String,
+    url: String,
+    publicId: String,
   }],
   error: {
     type: String,

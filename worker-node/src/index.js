@@ -8,31 +8,29 @@ import Video from './models/Video.js';
 
 dotenv.config();
 
-// Connect to Mongo (optional DB updates)
-const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/media_platform';
-mongoose.connect(mongoUri)
-  .then(() => console.log('[Worker-Node] Connected to MongoDB'))
-  .catch((err) => console.log('[Worker-Node] MongoDB notice:', err.message));
+const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/media_platform';
+const hostType = mongoUri.includes('mongodb+srv://') ? 'MongoDB Atlas Cloud Cluster' : 'MongoDB';
 
-// Create BullMQ Worker
+mongoose.connect(mongoUri)
+  .then(() => console.log(`[Worker-Node] Connected to ${hostType}`))
+  .catch((err) => console.log('[Worker-Node] MongoDB connection error:', err.message));
+
 const worker = new Worker(
   'video-processing',
   async (job) => {
     console.log(`[Worker-Node] Picked up job #${job.id}: ${job.name}`);
     
-    // Update DB status to processing
     try {
       await Video.findByIdAndUpdate(job.data.videoId, {
         status: 'processing',
         progress: 5,
       });
     } catch (e) {
-      // Ignored if DB offline
+      console.warn('[Worker-Node] Could not update DB pending status:', e.message);
     }
 
     const result = await processVideo(job);
 
-    // Update DB status to completed
     try {
       await Video.findByIdAndUpdate(job.data.videoId, {
         status: 'completed',
@@ -40,7 +38,7 @@ const worker = new Worker(
         outputResolutions: result.outputFiles,
       });
     } catch (e) {
-      // Ignored if DB offline
+      console.warn('[Worker-Node] Could not update DB completion status:', e.message);
     }
 
     return result;

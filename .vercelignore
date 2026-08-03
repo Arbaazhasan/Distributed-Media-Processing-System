@@ -1,0 +1,9 @@
+node_modules
+api-gateway
+worker-node
+signaling-server
+uploads
+processed
+docs
+scripts
+.git

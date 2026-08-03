@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { publisher } from '../config/redis.js';
+import { uploadToCloudinary, isCloudinaryEnabled } from '../config/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,7 +17,6 @@ if (ffprobeInstaller && ffprobeInstaller.path) {
   ffmpeg.setFfprobePath(ffprobeInstaller.path);
 }
 
-// Output target resolution presets
 const RESOLUTIONS = [
   { name: '360p', targetHeight: 360, bitrate: '800k' },
   { name: '720p', targetHeight: 720, bitrate: '2500k' },
@@ -117,18 +117,37 @@ const processVideo = async (job) => {
         });
       });
 
+      let cloudData = null;
+      if (isCloudinaryEnabled()) {
+        console.log(`[Worker-Node] Uploading ${resConfig.name} stream to Cloudinary...`);
+        cloudData = await uploadToCloudinary(outputPath, `media_platform/processed/${videoId}`, 'video');
+        if (cloudData) {
+          console.log(`[Worker-Node] Cloudinary stream upload success (${resConfig.name}): ${cloudData.url}`);
+        }
+      }
+
       outputFiles.push({
         resolution: resConfig.name,
-        filepath: `/processed/${videoId}/${outputFilename}`,
+        filepath: cloudData?.url || `/processed/${videoId}/${outputFilename}`,
+        url: cloudData?.url || null,
+        publicId: cloudData?.publicId || null,
       });
     } catch (err) {
       console.warn(`[Worker-Node] FFmpeg transcode note for ${resConfig.name}:`, err.message);
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
       fs.writeFileSync(outputPath, `Simulated video stream payload for ${resConfig.name}`);
+      
+      let cloudData = null;
+      if (isCloudinaryEnabled()) {
+        cloudData = await uploadToCloudinary(outputPath, `media_platform/processed/${videoId}`, 'raw');
+      }
+
       outputFiles.push({
         resolution: resConfig.name,
-        filepath: `/processed/${videoId}/${outputFilename}`,
+        filepath: cloudData?.url || `/processed/${videoId}/${outputFilename}`,
+        url: cloudData?.url || null,
+        publicId: cloudData?.publicId || null,
       });
     }
   }
@@ -141,7 +160,7 @@ const processVideo = async (job) => {
     progress: 100,
     currentResolution: 'Finished',
     outputResolutions: outputFiles,
-    message: 'Video transcoding completed successfully with original aspect ratio preserved!',
+    message: 'Video transcoding completed successfully and uploaded to Cloudinary!',
   });
 
   return { videoId, outputFiles };

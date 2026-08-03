@@ -4,13 +4,13 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import Video from '../models/Video.js';
 import { removeVideoJobs } from '../queues/videoQueue.js';
+import { deleteFromCloudinary } from '../config/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-// Get all videos
 router.get('/', async (req, res) => {
   try {
     const videos = await Video.find().sort({ createdAt: -1 });
@@ -20,7 +20,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get single video status
 router.get('/:id', async (req, res) => {
   try {
     const video = await Video.findById(req.params.id);
@@ -33,7 +32,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Download processed video file by video ID and resolution
 router.get('/download/:id/:resolution', async (req, res) => {
   try {
     const { id, resolution } = req.params;
@@ -43,9 +41,17 @@ router.get('/download/:id/:resolution', async (req, res) => {
       return res.status(404).json({ error: 'Video record not found' });
     }
 
+    const matchedRes = video.outputResolutions?.find(
+      (r) => r.resolution?.toLowerCase() === resolution?.toLowerCase()
+    );
+
+    if (matchedRes && matchedRes.url) {
+      return res.redirect(matchedRes.url);
+    }
+
     const filePath = path.resolve(__dirname, `../../../processed/${id}/${resolution}.mp4`);
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Processed video file not found on server' });
+      return res.status(404).json({ error: 'Processed video file not found' });
     }
 
     const cleanTitle = (video.title || 'processed_video').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -58,7 +64,6 @@ router.get('/download/:id/:resolution', async (req, res) => {
   }
 });
 
-// Delete video record and all associated server files + queues
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -68,13 +73,22 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Video not found' });
     }
 
-    // 1. Remove raw uploaded video file from disk (/uploads/)
+    if (video.cloudinaryPublicId) {
+      await deleteFromCloudinary(video.cloudinaryPublicId, 'video');
+    }
+
+    if (video.outputResolutions && video.outputResolutions.length > 0) {
+      for (const resItem of video.outputResolutions) {
+        if (resItem.publicId) {
+          await deleteFromCloudinary(resItem.publicId, 'video');
+        }
+      }
+    }
+
     if (video.filepath && fs.existsSync(video.filepath)) {
       try {
         fs.unlinkSync(video.filepath);
-      } catch (err) {
-        console.warn('[API-Gateway] Could not remove upload filepath:', err.message);
-      }
+      } catch (err) {}
     }
     if (video.filename) {
       const uploadPathByFilename = path.resolve(__dirname, `../../../uploads/${video.filename}`);
@@ -85,23 +99,17 @@ router.delete('/:id', async (req, res) => {
       }
     }
 
-    // 2. Remove all processed resolution streams from disk (/processed/<id>/)
     const processedDir = path.resolve(__dirname, `../../../processed/${id}`);
     if (fs.existsSync(processedDir)) {
       try {
         fs.rmSync(processedDir, { recursive: true, force: true });
-      } catch (err) {
-        console.warn('[API-Gateway] Could not remove processed directory:', err.message);
-      }
+      } catch (err) {}
     }
 
-    // 3. Remove active or historical BullMQ transcoding jobs from Redis
     await removeVideoJobs(id);
-
-    // 4. Delete MongoDB document metadata record
     await Video.findByIdAndDelete(id);
 
-    res.json({ message: 'Video and all associated files/data completely deleted', id });
+    res.json({ message: 'Video and all associated Cloudinary assets completely deleted', id });
   } catch (error) {
     console.error('[API-Gateway] Delete video error:', error);
     res.status(500).json({ error: 'Failed to delete video' });

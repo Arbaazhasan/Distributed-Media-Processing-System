@@ -7,16 +7,23 @@ export default function ProcessingTracker({ currentJob, logs, onStreamSelect }) 
   const targetId = currentJob?.videoId || currentJob?.id || currentJob?._id;
   const isCompleted = currentJob?.status === 'completed';
 
+  const getStreamUrl = (res) => {
+    if (res.url && res.url.startsWith('http')) return res.url;
+    if (res.filepath && res.filepath.startsWith('http')) return res.filepath;
+    return `${SERVER_HOST}${res.filepath}`;
+  };
+
   const handleStreamClick = (e, res) => {
     e.preventDefault();
+    const streamUrl = getStreamUrl(res);
     if (onStreamSelect) {
       onStreamSelect({
         title: `${currentJob.title || 'Video'} (${res.resolution})`,
-        filepath: res.filepath,
+        filepath: streamUrl,
         resolution: res.resolution,
       });
     } else {
-      window.open(`${SERVER_HOST}${res.filepath}`, '_blank');
+      window.open(streamUrl, '_blank');
     }
   };
 
@@ -57,31 +64,39 @@ export default function ProcessingTracker({ currentJob, logs, onStreamSelect }) 
             <div className="job-tracker__streams-section">
               <p className="job-tracker__streams-label">Output Streams Ready:</p>
               <div className="job-tracker__streams-grid">
-                {currentJob.outputResolutions.map((res, i) => (
-                  <div key={i} className="job-tracker__stream-chip">
-                    <span className="job-tracker__stream-res">{res.resolution}</span>
+                {currentJob.outputResolutions.map((res, i) => {
+                  const downloadUrl = (res.url && res.url.startsWith('http'))
+                    ? res.url
+                    : `${SERVER_HOST}/api/videos/download/${targetId}/${res.resolution}`;
 
-                    <button 
-                      onClick={(e) => handleStreamClick(e, res)}
-                      title="Play / Stream in App Player"
-                      className="job-tracker__stream-btn job-tracker__stream-btn--play"
-                      style={{ border: 'none', cursor: 'pointer' }}
-                    >
-                      <Play size={12} /> Stream
-                    </button>
+                  return (
+                    <div key={i} className="job-tracker__stream-chip">
+                      <span className="job-tracker__stream-res">{res.resolution}</span>
 
-                    {targetId && (
-                      <a 
-                        href={`${SERVER_HOST}/api/videos/download/${targetId}/${res.resolution}`}
-                        download
-                        title="Download MP4 to Local Machine"
-                        className="job-tracker__stream-btn job-tracker__stream-btn--download"
+                      <button 
+                        onClick={(e) => handleStreamClick(e, res)}
+                        title="Play / Stream in App Player"
+                        className="job-tracker__stream-btn job-tracker__stream-btn--play"
+                        style={{ border: 'none', cursor: 'pointer' }}
                       >
-                        <Download size={12} /> Download
-                      </a>
-                    )}
-                  </div>
-                ))}
+                        <Play size={12} /> Stream
+                      </button>
+
+                      {targetId && (
+                        <a 
+                          href={downloadUrl}
+                          download
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Download MP4 Video"
+                          className="job-tracker__stream-btn job-tracker__stream-btn--download"
+                        >
+                          <Download size={12} /> Download
+                        </a>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

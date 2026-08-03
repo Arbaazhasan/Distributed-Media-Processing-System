@@ -13,16 +13,23 @@ export default function VideoCard({ video, onSelect, onDelete, onStreamSelect })
     }
   };
 
+  const getStreamUrl = (res) => {
+    if (res.url && res.url.startsWith('http')) return res.url;
+    if (res.filepath && res.filepath.startsWith('http')) return res.filepath;
+    return `${SERVER_HOST}${res.filepath}`;
+  };
+
   const handlePlayStream = (e, res) => {
     e.preventDefault();
+    const streamUrl = getStreamUrl(res);
     if (onStreamSelect) {
       onStreamSelect({
         title: `${video.title} (${res.resolution})`,
-        filepath: res.filepath,
+        filepath: streamUrl,
         resolution: res.resolution,
       });
     } else {
-      window.open(`${SERVER_HOST}${res.filepath}`, '_blank');
+      window.open(streamUrl, '_blank');
     }
   };
 
@@ -62,31 +69,40 @@ export default function VideoCard({ video, onSelect, onDelete, onStreamSelect })
         <div className="video-card__outputs">
           <p className="video-card__outputs-title">Available Resolutions & Downloads:</p>
           <div className="video-card__outputs-list">
-            {video.outputResolutions.map((res, i) => (
-              <div key={i} className="video-card__output-item">
-                <span className="video-card__resolution">{res.resolution}</span>
+            {video.outputResolutions.map((res, i) => {
+              const streamUrl = getStreamUrl(res);
+              const downloadUrl = (res.url && res.url.startsWith('http')) 
+                ? res.url 
+                : `${SERVER_HOST}/api/videos/download/${videoId}/${res.resolution}`;
 
-                <div className="video-card__output-actions">
-                  <button 
-                    onClick={(e) => handlePlayStream(e, res)}
-                    title="Play / Stream in App Player"
-                    className="video-card__link-btn video-card__link-btn--play"
-                    style={{ border: 'none', cursor: 'pointer' }}
-                  >
-                    <Play size={12} /> Play
-                  </button>
+              return (
+                <div key={i} className="video-card__output-item">
+                  <span className="video-card__resolution">{res.resolution}</span>
 
-                  <a 
-                    href={`${SERVER_HOST}/api/videos/download/${videoId}/${res.resolution}`}
-                    download
-                    title="Download MP4 to Computer"
-                    className="video-card__link-btn video-card__link-btn--download"
-                  >
-                    <Download size={12} /> Download
-                  </a>
+                  <div className="video-card__output-actions">
+                    <button 
+                      onClick={(e) => handlePlayStream(e, res)}
+                      title="Play / Stream in App Player"
+                      className="video-card__link-btn video-card__link-btn--play"
+                      style={{ border: 'none', cursor: 'pointer' }}
+                    >
+                      <Play size={12} /> Play
+                    </button>
+
+                    <a 
+                      href={downloadUrl}
+                      download
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Download MP4 Video"
+                      className="video-card__link-btn video-card__link-btn--download"
+                    >
+                      <Download size={12} /> Download
+                    </a>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

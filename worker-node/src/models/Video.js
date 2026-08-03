@@ -5,6 +5,8 @@ const VideoSchema = new mongoose.Schema({
   originalFilename: String,
   filename: String,
   filepath: String,
+  cloudinaryUrl: String,
+  cloudinaryPublicId: String,
   fileSize: Number,
   status: {
     type: String,
@@ -13,7 +15,12 @@ const VideoSchema = new mongoose.Schema({
   },
   progress: { type: Number, default: 0 },
   currentResolution: { type: String, default: 'queued' },
-  outputResolutions: [{ resolution: String, filepath: String }],
+  outputResolutions: [{
+    resolution: String,
+    filepath: String,
+    url: String,
+    publicId: String,
+  }],
   error: { type: String, default: null },
   createdAt: { type: Date, default: Date.now },
 });
