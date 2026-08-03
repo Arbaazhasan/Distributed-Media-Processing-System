@@ -2,25 +2,21 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
+import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import Video from '../models/Video.js';
 import { addTranscodeJob } from '../queues/videoQueue.js';
-import { uploadToCloudinary, isCloudinaryEnabled } from '../config/cloudinary.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-const uploadDir = path.resolve(__dirname, '../../../uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+const tempUploadDir = path.join(os.tmpdir(), 'dmp_temp_uploads');
+if (!fs.existsSync(tempUploadDir)) {
+  fs.mkdirSync(tempUploadDir, { recursive: true });
 }
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, uploadDir);
+    cb(null, tempUploadDir);
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
@@ -40,7 +36,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 500 * 1024 * 1024 },
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max
 });
 
 router.post('/', upload.single('video'), async (req, res) => {
@@ -61,22 +57,13 @@ router.post('/', upload.single('video'), async (req, res) => {
 
     const videoTitle = existingCount > 0 ? `${baseTitle} #${existingCount + 1}` : baseTitle;
 
-    let cloudinaryData = null;
-    if (isCloudinaryEnabled()) {
-      console.log(`[API-Gateway] Uploading raw video "${req.file.originalname}" to Cloudinary...`);
-      cloudinaryData = await uploadToCloudinary(req.file.path, 'media_platform/uploads', 'video');
-      if (cloudinaryData) {
-        console.log(`[API-Gateway] Cloudinary upload successful: ${cloudinaryData.url}`);
-      }
-    }
-
     const video = new Video({
       title: videoTitle,
       originalFilename: req.file.originalname,
       filename: req.file.filename,
       filepath: req.file.path,
-      cloudinaryUrl: cloudinaryData?.url || null,
-      cloudinaryPublicId: cloudinaryData?.publicId || null,
+      cloudinaryUrl: null,
+      cloudinaryPublicId: null,
       fileSize: req.file.size,
       status: 'pending',
       progress: 0,
@@ -84,21 +71,22 @@ router.post('/', upload.single('video'), async (req, res) => {
 
     await video.save();
 
+    // Instant enqueue into BullMQ transcode queue without blocking HTTP response
     const job = await addTranscodeJob({
       videoId: video._id.toString(),
       filename: req.file.filename,
       inputPath: req.file.path,
-      cloudinaryUrl: video.cloudinaryUrl,
       title: videoTitle,
     });
 
+    // Instant 201 response to client (upload progress bar completes cleanly)
     res.status(201).json({
-      message: 'Video uploaded successfully and queued for processing',
+      message: 'Video uploaded successfully and enqueued for Cloudinary processing',
       video: {
-        id: video._id,
+        id: video._id.toString(),
+        _id: video._id.toString(),
         title: video.title,
         filename: video.filename,
-        cloudinaryUrl: video.cloudinaryUrl,
         status: video.status,
         jobId: job.id,
         createdAt: video.createdAt,

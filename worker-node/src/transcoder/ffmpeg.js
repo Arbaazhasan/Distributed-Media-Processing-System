@@ -3,6 +3,7 @@ import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { publisher } from '../config/redis.js';
 import { uploadToCloudinary, isCloudinaryEnabled } from '../config/cloudinary.js';
@@ -25,23 +26,23 @@ const RESOLUTIONS = [
 ];
 
 const updateProgressAndDb = async (data) => {
-  const { videoId, status, progress, currentResolution, outputResolutions } = data;
+  const { videoId, status, progress, currentResolution, outputResolutions, cloudinaryUrl, cloudinaryPublicId } = data;
 
-  // 1. Update MongoDB Atlas Cloud Cluster first
   if (videoId) {
     try {
       const updateData = { status, progress };
       if (currentResolution) updateData.currentResolution = currentResolution;
+      if (cloudinaryUrl) updateData.cloudinaryUrl = cloudinaryUrl;
+      if (cloudinaryPublicId) updateData.cloudinaryPublicId = cloudinaryPublicId;
       if (outputResolutions && outputResolutions.length > 0) {
         updateData.outputResolutions = outputResolutions;
       }
       await Video.findByIdAndUpdate(videoId, updateData);
     } catch (err) {
-      console.warn('[Worker-Node] MongoDB update notice:', err.message);
+      console.warn('[Worker-Node] DB update notice:', err.message);
     }
   }
 
-  // 2. Publish to Redis Pub/Sub for Socket.io real-time broadcast
   try {
     const channel = 'video-progress';
     await publisher.publish(channel, JSON.stringify(data));
@@ -50,9 +51,9 @@ const updateProgressAndDb = async (data) => {
   }
 };
 
-const probeVideoDimensions = (inputPath) => {
+const probeVideoDimensions = (inputSource) => {
   return new Promise((resolve) => {
-    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+    ffmpeg.ffprobe(inputSource, (err, metadata) => {
       if (err || !metadata || !metadata.streams) {
         console.warn('[Worker-Node] ffprobe notice:', err?.message || 'Metadata stream unavailable');
         resolve(null);
@@ -76,9 +77,10 @@ const processVideo = async (job) => {
   const { videoId, filename, inputPath, title } = job.data;
   console.log(`[Worker-Node] Starting processing job for video ${videoId} (${filename})`);
 
-  const outputDir = path.resolve(__dirname, '../../../processed', videoId);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
+  // Create temporary OS folder for processing
+  const tempOutputDir = path.join(os.tmpdir(), 'dmp_temp_processed', videoId);
+  if (!fs.existsSync(tempOutputDir)) {
+    fs.mkdirSync(tempOutputDir, { recursive: true });
   }
 
   await updateProgressAndDb({
@@ -87,11 +89,50 @@ const processVideo = async (job) => {
     title,
     status: 'processing',
     progress: 5,
+    currentResolution: 'Uploading Raw Video to Cloudinary',
+    message: 'Uploading raw video file to Cloudinary cloud storage...',
+  });
+
+  // Step 1: Upload raw file to Cloudinary first
+  let rawCloudinaryUrl = null;
+  let rawCloudinaryPublicId = null;
+
+  if (isCloudinaryEnabled() && inputPath && fs.existsSync(inputPath)) {
+    console.log(`[Worker-Node] Uploading raw media to Cloudinary (folder: media_platform/uploads)...`);
+    const rawCloudData = await uploadToCloudinary(inputPath, 'media_platform/uploads', 'video');
+    if (rawCloudData) {
+      rawCloudinaryUrl = rawCloudData.url;
+      rawCloudinaryPublicId = rawCloudData.publicId;
+      console.log(`[Worker-Node] Raw video uploaded to Cloudinary: ${rawCloudData.url}`);
+
+      await updateProgressAndDb({
+        jobId: job.id,
+        videoId,
+        title,
+        status: 'processing',
+        progress: 10,
+        currentResolution: 'Raw Uploaded to Cloudinary',
+        cloudinaryUrl: rawCloudinaryUrl,
+        cloudinaryPublicId: rawCloudinaryPublicId,
+        message: 'Raw video stored in Cloudinary. Deleting local raw upload...',
+      });
+    }
+  }
+
+  // Determine input source for FFmpeg (prefer local temp inputPath before deleting, or Cloudinary URL)
+  const ffmpegInput = (inputPath && fs.existsSync(inputPath)) ? inputPath : rawCloudinaryUrl;
+
+  await updateProgressAndDb({
+    jobId: job.id,
+    videoId,
+    title,
+    status: 'processing',
+    progress: 12,
     currentResolution: 'Analyzing Aspect Ratio',
     message: 'Analyzing video aspect ratio and frame dimensions...',
   });
 
-  const originalDimensions = await probeVideoDimensions(inputPath);
+  const originalDimensions = await probeVideoDimensions(ffmpegInput);
   if (originalDimensions) {
     console.log(
       `[Worker-Node] Video metadata: ${originalDimensions.width}x${originalDimensions.height} (${
@@ -106,7 +147,7 @@ const processVideo = async (job) => {
   for (let i = 0; i < RESOLUTIONS.length; i++) {
     const resConfig = RESOLUTIONS[i];
     const outputFilename = `${resConfig.name}.mp4`;
-    const outputPath = path.join(outputDir, outputFilename);
+    const tempOutputPath = path.join(tempOutputDir, outputFilename);
 
     console.log(`[Worker-Node] Transcoding ${resConfig.name} for video ${videoId}...`);
 
@@ -115,14 +156,14 @@ const processVideo = async (job) => {
       videoId,
       title,
       status: 'processing',
-      progress: Math.round((i / totalSteps) * 85 + 5),
+      progress: Math.round((i / totalSteps) * 75 + 15),
       currentResolution: resConfig.name,
-      message: `Encoding ${resConfig.name} video stream...`,
+      message: `Encoding ${resConfig.name} video stream (preserving aspect ratio)...`,
     });
 
     try {
-      await transcodeSingle(inputPath, outputPath, resConfig, originalDimensions, (percent) => {
-        const overallProgress = Math.round((i / totalSteps) * 85 + (percent / totalSteps) * 0.85 + 5);
+      await transcodeSingle(ffmpegInput, tempOutputPath, resConfig, originalDimensions, (percent) => {
+        const overallProgress = Math.round((i / totalSteps) * 75 + (percent / totalSteps) * 0.75 + 15);
         updateProgressAndDb({
           jobId: job.id,
           videoId,
@@ -135,21 +176,26 @@ const processVideo = async (job) => {
       });
 
       let cloudData = null;
-      if (isCloudinaryEnabled()) {
+      if (isCloudinaryEnabled() && fs.existsSync(tempOutputPath)) {
         await updateProgressAndDb({
           jobId: job.id,
           videoId,
           title,
           status: 'processing',
-          progress: Math.round(((i + 0.8) / totalSteps) * 85 + 5),
-          currentResolution: `Uploading ${resConfig.name} Cloudinary`,
+          progress: Math.round(((i + 0.8) / totalSteps) * 75 + 15),
+          currentResolution: `Uploading ${resConfig.name} to Cloudinary`,
           message: `Uploading ${resConfig.name} stream to Cloudinary...`,
         });
 
-        cloudData = await uploadToCloudinary(outputPath, `media_platform/processed/${videoId}`, 'video');
+        cloudData = await uploadToCloudinary(tempOutputPath, `media_platform/processed/${videoId}`, 'video');
         if (cloudData) {
           console.log(`[Worker-Node] Cloudinary stream upload success (${resConfig.name}): ${cloudData.url}`);
         }
+
+        // Delete temporary local resolution file immediately after Cloudinary upload
+        try {
+          fs.unlinkSync(tempOutputPath);
+        } catch (e) {}
       }
 
       outputFiles.push({
@@ -159,28 +205,31 @@ const processVideo = async (job) => {
         publicId: cloudData?.publicId || null,
       });
 
-      // Update intermediate outputResolutions in DB and publish
       await updateProgressAndDb({
         jobId: job.id,
         videoId,
         title,
         status: 'processing',
-        progress: Math.round(((i + 1) / totalSteps) * 85 + 5),
+        progress: Math.round(((i + 1) / totalSteps) * 75 + 15),
         currentResolution: resConfig.name,
         outputResolutions: [...outputFiles],
-        message: `Finished ${resConfig.name} resolution stream`,
+        message: `Finished ${resConfig.name} stream upload to Cloudinary`,
       });
 
     } catch (err) {
       console.warn(`[Worker-Node] FFmpeg transcode note for ${resConfig.name}:`, err.message);
 
       await new Promise((resolve) => setTimeout(resolve, 500));
-      fs.writeFileSync(outputPath, `Simulated video stream payload for ${resConfig.name}`);
+      fs.writeFileSync(tempOutputPath, `Simulated video stream payload for ${resConfig.name}`);
       
       let cloudData = null;
       if (isCloudinaryEnabled()) {
-        cloudData = await uploadToCloudinary(outputPath, `media_platform/processed/${videoId}`, 'raw');
+        cloudData = await uploadToCloudinary(tempOutputPath, `media_platform/processed/${videoId}`, 'raw');
       }
+
+      try {
+        if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+      } catch (e) {}
 
       outputFiles.push({
         resolution: resConfig.name,
@@ -191,7 +240,23 @@ const processVideo = async (job) => {
     }
   }
 
-  // Final Completion Update - MongoDB Atlas updated BEFORE publishing complete event
+  // Delete local raw input file from temp directory completely
+  if (inputPath && fs.existsSync(inputPath)) {
+    try {
+      fs.unlinkSync(inputPath);
+      console.log(`[Worker-Node] Deleted temporary raw file from local disk: ${inputPath}`);
+    } catch (e) {}
+  }
+
+  // Delete temporary processing folder
+  if (fs.existsSync(tempOutputDir)) {
+    try {
+      fs.rmSync(tempOutputDir, { recursive: true, force: true });
+      console.log(`[Worker-Node] Purged temporary processing folder: ${tempOutputDir}`);
+    } catch (e) {}
+  }
+
+  // Final Completion Event
   await updateProgressAndDb({
     jobId: job.id,
     videoId,
@@ -199,8 +264,10 @@ const processVideo = async (job) => {
     status: 'completed',
     progress: 100,
     currentResolution: 'Finished',
+    cloudinaryUrl: rawCloudinaryUrl,
+    cloudinaryPublicId: rawCloudinaryPublicId,
     outputResolutions: outputFiles,
-    message: 'Video transcoding completed successfully and uploaded to Cloudinary!',
+    message: 'Video transcoding & Cloudinary storage completed successfully!',
   });
 
   return { videoId, outputFiles };
