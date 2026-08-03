@@ -9,19 +9,20 @@ import subscriber from './config/redis.js';
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*', credentials: true }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
+    credentials: true,
   },
+  allowEIO3: true,
 });
 
 const PORT = process.env.PORT || 4000;
 
-// Socket.io connection handling
 io.on('connection', (socket) => {
   console.log(`[Signaling-Server] Client connected: ${socket.id}`);
 
@@ -35,7 +36,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Subscribe to Redis Pub/Sub channel
 const CHANNEL = 'video-progress';
 
 subscriber.subscribe(CHANNEL, (err, count) => {
@@ -52,7 +52,6 @@ subscriber.on('message', (channel, message) => {
       const data = JSON.parse(message);
       console.log(`[Signaling-Server] Received progress for video ${data.videoId}: ${data.progress}% (${data.currentResolution})`);
       
-      // Broadcast to all clients or specific video room
       io.emit('video:progress', data);
       if (data.videoId) {
         io.to(`video:${data.videoId}`).emit('video:progress', data);

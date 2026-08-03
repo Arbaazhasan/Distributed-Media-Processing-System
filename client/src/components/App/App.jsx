@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Navbar from '../Navbar';
 import UploadZone from '../UploadZone';
 import ProcessingTracker from '../ProcessingTracker';
@@ -12,6 +12,7 @@ import './App.scss';
 export default function App() {
   const [currentJob, setCurrentJob] = useState(null);
   const [activeStream, setActiveStream] = useState(null);
+  const lastLoggedProgressRef = useRef(null);
 
   const { videos, fetchVideos, updateVideoProgress, deleteVideo } = useVideos();
 
@@ -31,7 +32,7 @@ export default function App() {
 
   const { isConnected, logs, addLog } = useSocket(handleProgressEvent);
 
-  // Active Job Polling Fallback (Polls every 2s while job is active)
+  // Synchronize logs & job state via polling fallback if WebSocket is offline or on Vercel
   useEffect(() => {
     if (!currentJob || currentJob.status === 'completed' || currentJob.status === 'failed') {
       return;
@@ -58,17 +59,23 @@ export default function App() {
             outputResolutions: updated.outputResolutions,
           });
 
+          // Log progress step into Real-Time Redis Pub/Sub Stream box
+          const logKey = `${updated.status}-${updated.progress}-${updated.currentResolution}`;
+          if (lastLoggedProgressRef.current !== logKey) {
+            lastLoggedProgressRef.current = logKey;
+            const logMessage = `[Redis Pub/Sub] Transcode step: ${updated.currentResolution || updated.status} (${updated.progress}%)`;
+            addLog(logMessage);
+          }
+
           if (updated.status === 'completed') {
             fetchVideos();
           }
         }
-      } catch (err) {
-        // Polling notice ignored if server temporarily busy
-      }
-    }, 2000);
+      } catch (err) {}
+    }, 1500);
 
     return () => clearInterval(interval);
-  }, [currentJob, updateVideoProgress, fetchVideos]);
+  }, [currentJob, updateVideoProgress, fetchVideos, addLog]);
 
   const handleUploadSuccess = (videoData) => {
     const jobPayload = {
@@ -81,25 +88,27 @@ export default function App() {
     };
     setCurrentJob(jobPayload);
     updateVideoProgress(jobPayload);
-    addLog(`Uploaded video "${videoData.title}" - Job #${videoData.jobId} enqueued.`);
+    addLog(`[Upload Success] Enqueued video "${videoData.title}" into Redis BullMQ processing queue (Job #${videoData.jobId})`);
     fetchVideos();
   };
 
   const handleDeleteVideo = async (videoId) => {
     try {
       await deleteVideo(videoId);
-      addLog(`Deleted video record [${videoId}]`);
+      addLog(`[Storage Sync] Purged video record & Cloudinary assets for [${videoId}]`);
       if (currentJob && (currentJob.videoId === videoId || currentJob.id === videoId || currentJob._id === videoId)) {
         setCurrentJob(null);
       }
     } catch (err) {
-      addLog(`Error deleting video: ${err.message}`);
+      addLog(`[Storage Warning] Error deleting video: ${err.message}`);
     }
   };
 
+  const isSignalingActive = isConnected || (currentJob && currentJob.status === 'processing');
+
   return (
     <div className="app-layout">
-      <Navbar socketConnected={isConnected} />
+      <Navbar socketConnected={isSignalingActive} />
 
       <main className="app-layout__dashboard">
         <UploadZone onUploadSuccess={handleUploadSuccess} />
