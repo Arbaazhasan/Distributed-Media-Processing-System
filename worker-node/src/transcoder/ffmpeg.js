@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { publisher } from '../config/redis.js';
 import { uploadToCloudinary, isCloudinaryEnabled } from '../config/cloudinary.js';
+import Video from '../models/Video.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,13 +24,29 @@ const RESOLUTIONS = [
   { name: '1080p', targetHeight: 1080, bitrate: '5000k' },
 ];
 
-const publishProgress = async (data) => {
-  const channel = 'video-progress';
-  const message = JSON.stringify(data);
+const updateProgressAndDb = async (data) => {
+  const { videoId, status, progress, currentResolution, outputResolutions } = data;
+
+  // 1. Update MongoDB Atlas Cloud Cluster first
+  if (videoId) {
+    try {
+      const updateData = { status, progress };
+      if (currentResolution) updateData.currentResolution = currentResolution;
+      if (outputResolutions && outputResolutions.length > 0) {
+        updateData.outputResolutions = outputResolutions;
+      }
+      await Video.findByIdAndUpdate(videoId, updateData);
+    } catch (err) {
+      console.warn('[Worker-Node] MongoDB update notice:', err.message);
+    }
+  }
+
+  // 2. Publish to Redis Pub/Sub for Socket.io real-time broadcast
   try {
-    await publisher.publish(channel, message);
+    const channel = 'video-progress';
+    await publisher.publish(channel, JSON.stringify(data));
   } catch (err) {
-    console.error('[Worker-Node] Failed to publish progress to Redis:', err.message);
+    console.error('[Worker-Node] Redis publish notice:', err.message);
   }
 };
 
@@ -64,13 +81,13 @@ const processVideo = async (job) => {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  await publishProgress({
+  await updateProgressAndDb({
     jobId: job.id,
     videoId,
     title,
     status: 'processing',
     progress: 5,
-    currentResolution: 'Analyzing Video Aspect Ratio',
+    currentResolution: 'Analyzing Aspect Ratio',
     message: 'Analyzing video aspect ratio and frame dimensions...',
   });
 
@@ -93,25 +110,25 @@ const processVideo = async (job) => {
 
     console.log(`[Worker-Node] Transcoding ${resConfig.name} for video ${videoId}...`);
 
-    await publishProgress({
+    await updateProgressAndDb({
       jobId: job.id,
       videoId,
       title,
       status: 'processing',
-      progress: Math.round((i / totalSteps) * 90 + 5),
+      progress: Math.round((i / totalSteps) * 85 + 5),
       currentResolution: resConfig.name,
-      message: `Encoding ${resConfig.name} video stream (preserving aspect ratio)...`,
+      message: `Encoding ${resConfig.name} video stream...`,
     });
 
     try {
       await transcodeSingle(inputPath, outputPath, resConfig, originalDimensions, (percent) => {
-        const overallProgress = Math.round((i / totalSteps) * 90 + (percent / totalSteps) * 0.9 + 5);
-        publishProgress({
+        const overallProgress = Math.round((i / totalSteps) * 85 + (percent / totalSteps) * 0.85 + 5);
+        updateProgressAndDb({
           jobId: job.id,
           videoId,
           title,
           status: 'processing',
-          progress: Math.min(overallProgress, 95),
+          progress: Math.min(overallProgress, 90),
           currentResolution: resConfig.name,
           message: `Transcoding ${resConfig.name}: ${Math.round(percent)}%`,
         });
@@ -119,7 +136,16 @@ const processVideo = async (job) => {
 
       let cloudData = null;
       if (isCloudinaryEnabled()) {
-        console.log(`[Worker-Node] Uploading ${resConfig.name} stream to Cloudinary...`);
+        await updateProgressAndDb({
+          jobId: job.id,
+          videoId,
+          title,
+          status: 'processing',
+          progress: Math.round(((i + 0.8) / totalSteps) * 85 + 5),
+          currentResolution: `Uploading ${resConfig.name} Cloudinary`,
+          message: `Uploading ${resConfig.name} stream to Cloudinary...`,
+        });
+
         cloudData = await uploadToCloudinary(outputPath, `media_platform/processed/${videoId}`, 'video');
         if (cloudData) {
           console.log(`[Worker-Node] Cloudinary stream upload success (${resConfig.name}): ${cloudData.url}`);
@@ -132,10 +158,23 @@ const processVideo = async (job) => {
         url: cloudData?.url || null,
         publicId: cloudData?.publicId || null,
       });
+
+      // Update intermediate outputResolutions in DB and publish
+      await updateProgressAndDb({
+        jobId: job.id,
+        videoId,
+        title,
+        status: 'processing',
+        progress: Math.round(((i + 1) / totalSteps) * 85 + 5),
+        currentResolution: resConfig.name,
+        outputResolutions: [...outputFiles],
+        message: `Finished ${resConfig.name} resolution stream`,
+      });
+
     } catch (err) {
       console.warn(`[Worker-Node] FFmpeg transcode note for ${resConfig.name}:`, err.message);
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       fs.writeFileSync(outputPath, `Simulated video stream payload for ${resConfig.name}`);
       
       let cloudData = null;
@@ -152,7 +191,8 @@ const processVideo = async (job) => {
     }
   }
 
-  await publishProgress({
+  // Final Completion Update - MongoDB Atlas updated BEFORE publishing complete event
+  await updateProgressAndDb({
     jobId: job.id,
     videoId,
     title,

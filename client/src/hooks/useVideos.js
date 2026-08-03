@@ -24,15 +24,33 @@ export function useVideos() {
   }, [fetchVideos]);
 
   const updateVideoProgress = useCallback((data) => {
-    setVideos((prevVideos) =>
-      prevVideos.map((v) => {
+    setVideos((prevVideos) => {
+      const targetId = String(data.videoId || data.id);
+      const exists = prevVideos.some((v) => String(v._id || v.id) === targetId);
+
+      if (!exists && data.videoId) {
+        return [
+          {
+            _id: data.videoId,
+            id: data.videoId,
+            title: data.title || 'Transcoding Task',
+            status: data.status || 'processing',
+            progress: data.progress || 0,
+            currentResolution: data.currentResolution || 'Queued',
+            outputResolutions: data.outputResolutions || [],
+            createdAt: new Date(),
+          },
+          ...prevVideos,
+        ];
+      }
+
+      return prevVideos.map((v) => {
         const vId = String(v._id || v.id);
-        const targetId = String(data.videoId || data.id);
         if (vId === targetId) {
           return {
             ...v,
-            status: data.status,
-            progress: data.progress,
+            status: data.status || v.status,
+            progress: typeof data.progress === 'number' ? data.progress : v.progress,
             currentResolution: data.currentResolution || v.currentResolution,
             outputResolutions:
               data.outputResolutions && data.outputResolutions.length > 0
@@ -41,8 +59,8 @@ export function useVideos() {
           };
         }
         return v;
-      })
-    );
+      });
+    });
   }, []);
 
   const deleteVideo = useCallback(async (videoId) => {
