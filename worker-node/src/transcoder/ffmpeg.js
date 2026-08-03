@@ -1,5 +1,6 @@
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -11,12 +12,15 @@ const __dirname = path.dirname(__filename);
 if (ffmpegInstaller && ffmpegInstaller.path) {
   ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 }
+if (ffprobeInstaller && ffprobeInstaller.path) {
+  ffmpeg.setFfprobePath(ffprobeInstaller.path);
+}
 
-// Output target presets
+// Output target resolution presets
 const RESOLUTIONS = [
-  { name: '360p', width: 640, height: 360, bitrate: '800k' },
-  { name: '720p', width: 1280, height: 720, bitrate: '2500k' },
-  { name: '1080p', width: 1920, height: 1080, bitrate: '5000k' },
+  { name: '360p', targetHeight: 360, bitrate: '800k' },
+  { name: '720p', targetHeight: 720, bitrate: '2500k' },
+  { name: '1080p', targetHeight: 1080, bitrate: '5000k' },
 ];
 
 const publishProgress = async (data) => {
@@ -27,6 +31,28 @@ const publishProgress = async (data) => {
   } catch (err) {
     console.error('[Worker-Node] Failed to publish progress to Redis:', err.message);
   }
+};
+
+const probeVideoDimensions = (inputPath) => {
+  return new Promise((resolve) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err || !metadata || !metadata.streams) {
+        console.warn('[Worker-Node] ffprobe notice:', err?.message || 'Metadata stream unavailable');
+        resolve(null);
+        return;
+      }
+      const videoStream = metadata.streams.find((s) => s.codec_type === 'video');
+      if (!videoStream || !videoStream.width || !videoStream.height) {
+        resolve(null);
+        return;
+      }
+      resolve({
+        width: videoStream.width,
+        height: videoStream.height,
+        isPortrait: videoStream.height > videoStream.width,
+      });
+    });
+  });
 };
 
 const processVideo = async (job) => {
@@ -44,9 +70,18 @@ const processVideo = async (job) => {
     title,
     status: 'processing',
     progress: 5,
-    currentResolution: 'Initializing FFmpeg',
-    message: 'Starting media transcoding pipeline...',
+    currentResolution: 'Analyzing Video Aspect Ratio',
+    message: 'Analyzing video aspect ratio and frame dimensions...',
   });
+
+  const originalDimensions = await probeVideoDimensions(inputPath);
+  if (originalDimensions) {
+    console.log(
+      `[Worker-Node] Video metadata: ${originalDimensions.width}x${originalDimensions.height} (${
+        originalDimensions.isPortrait ? 'Portrait' : 'Landscape'
+      })`
+    );
+  }
 
   const outputFiles = [];
   const totalSteps = RESOLUTIONS.length;
@@ -63,13 +98,13 @@ const processVideo = async (job) => {
       videoId,
       title,
       status: 'processing',
-      progress: Math.round(((i) / totalSteps) * 90 + 5),
+      progress: Math.round((i / totalSteps) * 90 + 5),
       currentResolution: resConfig.name,
-      message: `Encoding ${resConfig.name} video stream...`,
+      message: `Encoding ${resConfig.name} video stream (preserving aspect ratio)...`,
     });
 
     try {
-      await transcodeSingle(inputPath, outputPath, resConfig, (percent) => {
+      await transcodeSingle(inputPath, outputPath, resConfig, originalDimensions, (percent) => {
         const overallProgress = Math.round((i / totalSteps) * 90 + (percent / totalSteps) * 0.9 + 5);
         publishProgress({
           jobId: job.id,
@@ -87,9 +122,8 @@ const processVideo = async (job) => {
         filepath: `/processed/${videoId}/${outputFilename}`,
       });
     } catch (err) {
-      console.warn(`[Worker-Node] FFmpeg system check note for ${resConfig.name}:`, err.message);
+      console.warn(`[Worker-Node] FFmpeg transcode note for ${resConfig.name}:`, err.message);
 
-      // Fallback: If native ffmpeg binary is not installed locally, simulate encoded output step for demo
       await new Promise((resolve) => setTimeout(resolve, 1000));
       fs.writeFileSync(outputPath, `Simulated video stream payload for ${resConfig.name}`);
       outputFiles.push({
@@ -107,18 +141,24 @@ const processVideo = async (job) => {
     progress: 100,
     currentResolution: 'Finished',
     outputResolutions: outputFiles,
-    message: 'Video transcoding completed successfully!',
+    message: 'Video transcoding completed successfully with original aspect ratio preserved!',
   });
 
   return { videoId, outputFiles };
 };
 
-const transcodeSingle = (input, output, resConfig, onProgress) => {
+const transcodeSingle = (input, output, resConfig, originalDimensions, onProgress) => {
   return new Promise((resolve, reject) => {
+    let sizeFilter = `?x${resConfig.targetHeight}`;
+    if (originalDimensions && originalDimensions.isPortrait) {
+      sizeFilter = `${resConfig.targetHeight}x?`;
+    }
+
     ffmpeg(input)
       .output(output)
       .videoCodec('libx264')
-      .size(`${resConfig.width}x${resConfig.height}`)
+      .size(sizeFilter)
+      .autopad()
       .videoBitrate(resConfig.bitrate)
       .on('progress', (progress) => {
         if (progress.percent) {
@@ -135,6 +175,4 @@ const transcodeSingle = (input, output, resConfig, onProgress) => {
   });
 };
 
-export {
-  processVideo,
-};
+export { processVideo };

@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
-import { UploadCloud, FileVideo, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
-import axios from 'axios';
-
-const API_URL = 'http://localhost:3000/api/upload';
+import React, { useState, useRef } from 'react';
+import { UploadCloud, FileVideo, AlertCircle, Loader2 } from 'lucide-react';
+import { videoService } from '../../services/api';
+import './UploadZone.scss';
 
 export default function UploadZone({ onUploadSuccess }) {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -10,15 +9,14 @@ export default function UploadZone({ onUploadSuccess }) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setSelectedFile(file);
       setError(null);
-      // Always set title to current selected file name (without extension)
       setTitle(file.name.replace(/\.[^/.]+$/, ''));
-      // Reset input value to allow selecting same file again if needed
       e.target.value = '';
     }
   };
@@ -35,26 +33,21 @@ export default function UploadZone({ onUploadSuccess }) {
     setError(null);
 
     const videoTitle = title.trim() || selectedFile.name.replace(/\.[^/.]+$/, '');
-
     const formData = new FormData();
     formData.append('video', selectedFile);
     formData.append('title', videoTitle);
 
     try {
-      const res = await axios.post(API_URL, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (progressEvent) => {
-          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(percent);
-        },
+      const res = await videoService.upload(formData, (percent) => {
+        setUploadProgress(percent);
       });
 
       setUploading(false);
       setSelectedFile(null);
       setTitle('');
 
-      if (onUploadSuccess && res.data && res.data.video) {
-        onUploadSuccess(res.data.video);
+      if (onUploadSuccess && res?.video) {
+        onUploadSuccess(res.video);
       }
     } catch (err) {
       setUploading(false);
@@ -63,37 +56,38 @@ export default function UploadZone({ onUploadSuccess }) {
   };
 
   return (
-    <div className="glass-card">
-      <h2 className="section-title">
-        <UploadCloud size={20} color="var(--primary)" />
+    <div className="upload-card">
+      <h2 className="upload-card__header">
+        <UploadCloud size={20} className="upload-card__icon" />
         Upload Media Content
       </h2>
 
       <form onSubmit={handleUpload}>
         <div 
-          className="dropzone"
-          onClick={() => document.getElementById('video-input').click()}
+          className="upload-card__dropzone"
+          onClick={() => fileInputRef.current?.click()}
         >
-          <FileVideo size={48} color={selectedFile ? 'var(--primary)' : 'var(--text-muted)'} />
+          <FileVideo 
+            size={48} 
+            className={`upload-card__file-icon ${selectedFile ? 'upload-card__file-icon--selected' : ''}`}
+          />
+
           {selectedFile ? (
             <div>
-              <p style={{ fontWeight: 700, color: 'var(--text-main)' }}>{selectedFile.name}</p>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              <p className="upload-card__filename">{selectedFile.name}</p>
+              <p className="upload-card__filesize">
                 {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
               </p>
             </div>
           ) : (
             <div>
-              <p style={{ fontWeight: 600, color: 'var(--text-main)' }}>
-                Click or Drag video to upload
-              </p>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                Supports MP4, MOV, AVI, MKV (Up to 500MB)
-              </p>
+              <p className="upload-card__prompt-main">Click or Drag video to upload</p>
+              <p className="upload-card__prompt-sub">Supports MP4, MOV, AVI, MKV (Up to 500MB)</p>
             </div>
           )}
+
           <input
-            id="video-input"
+            ref={fileInputRef}
             type="file"
             accept="video/*"
             style={{ display: 'none' }}
@@ -105,7 +99,7 @@ export default function UploadZone({ onUploadSuccess }) {
           <div>
             <input
               type="text"
-              className="upload-input-field"
+              className="upload-card__input-field"
               placeholder="Video Title / Description"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -114,32 +108,35 @@ export default function UploadZone({ onUploadSuccess }) {
         )}
 
         {error && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--error)', marginTop: '12px', fontSize: '0.9rem' }}>
+          <div className="upload-card__error-message">
             <AlertCircle size={16} />
             {error}
           </div>
         )}
 
         {uploading && (
-          <div style={{ marginTop: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+          <div className="upload-card__progress-wrapper">
+            <div className="upload-card__progress-info">
               <span>Uploading to API Gateway...</span>
               <span>{uploadProgress}%</span>
             </div>
-            <div className="progress-track">
-              <div className="progress-fill" style={{ width: `${uploadProgress}%` }}></div>
+            <div className="upload-card__progress-track">
+              <div 
+                className="upload-card__progress-fill" 
+                style={{ width: `${uploadProgress}%` }}
+              />
             </div>
           </div>
         )}
 
         <button
           type="submit"
-          className="btn-primary"
+          className="upload-card__submit-btn"
           disabled={!selectedFile || uploading}
         >
           {uploading ? (
             <>
-              <Loader2 size={18} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
+              <Loader2 size={18} className="upload-card__spinner" />
               Uploading Video...
             </>
           ) : (

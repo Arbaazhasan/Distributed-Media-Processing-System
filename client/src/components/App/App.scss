@@ -1,0 +1,19 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.app-layout {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px;
+
+  &__dashboard {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 32px;
+
+    @media (max-width: 900px) {
+      grid-template-columns: 1fr;
+    }
+  }
+}
