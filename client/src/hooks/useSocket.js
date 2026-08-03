@@ -13,8 +13,11 @@ export function useSocket(onProgressEvent) {
 
   useEffect(() => {
     const socket = io(SIGNALING_URL, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
+      transports: ['polling', 'websocket'],
+      reconnection: true,
+      reconnectionAttempts: 20,
+      reconnectionDelay: 1000,
+      timeout: 20000,
     });
 
     socket.on('connect', () => {
@@ -25,6 +28,10 @@ export function useSocket(onProgressEvent) {
     socket.on('disconnect', () => {
       setIsConnected(false);
       addLog('Disconnected from Signaling Server');
+    });
+
+    socket.on('connect_error', (err) => {
+      console.warn('[Socket.io] Connection warning:', err.message);
     });
 
     socket.on('video:progress', (data) => {

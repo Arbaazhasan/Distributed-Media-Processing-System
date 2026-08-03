@@ -8,11 +8,22 @@ import Video from './models/Video.js';
 
 dotenv.config();
 
-const mongoUri = process.env.DB_CONNECTION || process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/media_platform';
-const hostType = mongoUri.includes('mongodb+srv://') ? 'MongoDB Atlas Cloud Cluster' : 'MongoDB';
+const formatMongoUri = (rawUri) => {
+  if (!rawUri) return 'mongodb://localhost:27017/media_platform';
+  let uri = rawUri.trim();
+  if (uri.includes('.mongodb.net/?')) {
+    uri = uri.replace('.mongodb.net/?', '.mongodb.net/media_platform?');
+  } else if (uri.match(/\.mongodb\.net\/?$/)) {
+    uri = uri.replace(/\.mongodb\.net\/?$/, '.mongodb.net/media_platform');
+  }
+  return uri;
+};
+
+const rawUri = process.env.DB_CONNECTION || process.env.MONGO_URI || process.env.MONGODB_URI;
+const mongoUri = formatMongoUri(rawUri);
 
 mongoose.connect(mongoUri)
-  .then(() => console.log(`[Worker-Node] Connected to ${hostType}`))
+  .then((conn) => console.log(`[Worker-Node] Connected to MongoDB Atlas Cloud Cluster (${conn.connection.name})`))
   .catch((err) => console.log('[Worker-Node] MongoDB connection error:', err.message));
 
 const worker = new Worker(

@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import Video from '../models/Video.js';
 import { removeVideoJobs } from '../queues/videoQueue.js';
-import { deleteFromCloudinary } from '../config/cloudinary.js';
+import { deleteFromCloudinary, deleteFolderFromCloudinary } from '../config/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,10 +73,12 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Video not found' });
     }
 
+    // 1. Delete raw video file asset from Cloudinary
     if (video.cloudinaryPublicId) {
       await deleteFromCloudinary(video.cloudinaryPublicId, 'video');
     }
 
+    // 2. Delete individual resolution assets & processed Cloudinary folder
     if (video.outputResolutions && video.outputResolutions.length > 0) {
       for (const resItem of video.outputResolutions) {
         if (resItem.publicId) {
@@ -84,7 +86,9 @@ router.delete('/:id', async (req, res) => {
         }
       }
     }
+    await deleteFolderFromCloudinary(`media_platform/processed/${id}`);
 
+    // 3. Remove local server disk files if present
     if (video.filepath && fs.existsSync(video.filepath)) {
       try {
         fs.unlinkSync(video.filepath);
@@ -106,10 +110,11 @@ router.delete('/:id', async (req, res) => {
       } catch (err) {}
     }
 
+    // 4. Clean up queues and MongoDB record
     await removeVideoJobs(id);
     await Video.findByIdAndDelete(id);
 
-    res.json({ message: 'Video and all associated Cloudinary assets completely deleted', id });
+    res.json({ message: 'Video and all associated Cloudinary folders completely deleted', id });
   } catch (error) {
     console.error('[API-Gateway] Delete video error:', error);
     res.status(500).json({ error: 'Failed to delete video' });

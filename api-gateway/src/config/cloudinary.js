@@ -49,4 +49,20 @@ export const deleteFromCloudinary = async (publicId, resourceType = 'video') => 
   }
 };
 
+export const deleteFolderFromCloudinary = async (folderPath) => {
+  if (!isConfigured || !folderPath) return;
+  try {
+    // 1. Delete all resources under folder path
+    await cloudinary.api.delete_resources_by_prefix(folderPath, { resource_type: 'video' });
+    await cloudinary.api.delete_resources_by_prefix(folderPath, { resource_type: 'image' });
+    await cloudinary.api.delete_resources_by_prefix(folderPath, { resource_type: 'raw' });
+    
+    // 2. Delete the empty folder itself
+    await cloudinary.api.delete_folder(folderPath);
+    console.log(`[Cloudinary] Successfully deleted folder: ${folderPath}`);
+  } catch (err) {
+    console.warn(`[Cloudinary] Folder delete notice for ${folderPath}:`, err.message);
+  }
+};
+
 export default cloudinary;
