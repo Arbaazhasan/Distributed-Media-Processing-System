@@ -1,0 +1,13 @@
+{
+  "name": "distributed-media-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Distributed Media Processing Platform Monorepo",
+  "scripts": {
+    "start": "node scripts/start-all.js",
+    "install:all": "npm install --prefix api-gateway && npm install --prefix worker-node && npm install --prefix signaling-server && npm install --prefix client",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  }
+}

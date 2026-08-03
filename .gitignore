@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+
+# Documentation (locally generated HTML files)
+docs/
+
+# Uploaded and transcode output media
+uploads/
+processed/
+
+# Environment files
+.env
+.env.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# IDE & OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
